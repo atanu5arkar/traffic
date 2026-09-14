@@ -1,6 +1,10 @@
 import math
 import time
 from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 
 
 @dataclass
@@ -10,10 +14,19 @@ class TokenBucket:
     tokens: int = size
     last_used: float = time.time()
 
+
+@dataclass
+class ClientState:
+    limit: str
+    remaining: str
+    reset: str
+
+
 store = {}
+app = FastAPI(title="Traffic")
 
 
-def fill(bucket: TokenBucket):
+def refill(bucket: TokenBucket):
     now = time.time()
     time_elapsed: int = math.floor(now - bucket.last_used)
     if not time_elapsed:
@@ -29,32 +42,49 @@ def fill(bucket: TokenBucket):
     return
 
 
-def check_bucket(key):
-    bucket = store.get(key)
+def get_client_state(bucket: TokenBucket):
+    limit = bucket.size
+    remaining = bucket.tokens
+    reset_time = int(time.time() + (limit - remaining) * bucket.rps)
+    return ClientState(
+        limit=str(limit), remaining=str(remaining), reset=str(reset_time)
+    )
 
+
+def check_bucket(key: str) -> tuple[str, ClientState]:
+    bucket: TokenBucket | None = store.get(key)
+
+    # Handle the first request from the client
     if not bucket:
         bucket = TokenBucket()
-        store[key] = bucket
         bucket.tokens -= 1
-        return True
+        store[key] = bucket
+        return "ALLOW", get_client_state(bucket)
 
-    fill(bucket)
+    refill(bucket)
+    state = get_client_state(bucket)
+
     if bucket.tokens == 0:
-        return False
+        return "DENY", state
 
     bucket.tokens -= 1
-    return True
+    bucket.last_used = time.time()
+    return "ALLOW", state
 
 
-def limiter(req):
-    # Part of req headers
-    key = "1"
-    result = check_bucket(key)
-    # Return a proper rate-limit response with 429 status
-    return "ALLOW" if result else "DENY"
+def limiter(key: str):
+    msg, state = check_bucket(key)
+    return JSONResponse(
+        content={"message": msg},
+        status_code=200 if msg == "ALLOW" else 429,
+        headers={
+            "x-ratelimit-limit": state.limit,
+            "x-ratelimit-remaining": state.remaining,
+            "x-ratelimit-reset": state.reset,
+        },
+    )
 
 
-if __name__ == "__main__":
-    for i in range(1, 13):
-        res = limiter({})
-        print(f"req{i}: {res}")
+@app.get("/limit")
+def handle_limit(x_client_key: Annotated[str, Header()]):
+    return limiter(x_client_key)

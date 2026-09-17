@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 @dataclass
 class TokenBucket:
-    size: int = 10
-    rps: int = 1
-    tokens: int = size
+    size: int
+    rps: int
+    tokens: int
     last_used: float = time.time()
 
 

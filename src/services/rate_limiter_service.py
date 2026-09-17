@@ -3,6 +3,8 @@ import time
 
 from fastapi.responses import JSONResponse
 
+from src.constants import DEFAULT_BUCKET
+from src.repositories.config_repository import config_repo
 from src.schemas.internal.token_bucket import ClientState, TokenBucket
 
 
@@ -22,13 +24,17 @@ class RateLimiterService:
             },
         )
 
+    def set_limit(self, key: str):
+        config_repo.add(key)
+        return JSONResponse(content={"msg": "Created"}, status_code=201)
+
     def _check_bucket(self, key: str) -> tuple[str, ClientState]:
         msg = ""
         bucket: TokenBucket | None = self._store.get(key)
 
         # Handle the first request from the client
         if not bucket:
-            bucket = TokenBucket()
+            bucket = self._create_bucket(key)
             self._store[key] = bucket
 
         # Compensate for the elapsed time before deducting more tokens
@@ -43,6 +49,16 @@ class RateLimiterService:
 
         state = self._client_state(bucket)
         return msg, state
+
+    def _create_bucket(self, key: str):
+        # Can use custom limits for the client, if available
+        conf = config_repo.get(key)
+        attributes = (
+            {"size": conf.burst_size, "rps": conf.rps, "tokens": conf.burst_size}
+            if conf
+            else DEFAULT_BUCKET
+        )
+        return TokenBucket(**attributes)
 
     def _client_state(self, bucket: TokenBucket):
         limit = bucket.size
@@ -66,5 +82,6 @@ class RateLimiterService:
         else:
             bucket.tokens = new_tokens
         return
+
 
 service = RateLimiterService()

@@ -12,3 +12,10 @@ A store is needed for the buckets. It must be in-memory for fast-access: REDIS.
 GET /limit
 - Headers: x-client-key
 - Responds with ALLOW or DENY with std rate-limit headers: limit, remaining, and reset
+
+Limits are configurable on a per-client basis. Such configs are persisted in a database. A MongoDB collection with a unique index on the client field suffices for the purpose.
+
+POST /limit/set
+- Headers: x-client-key
+- Body: rps, burst_size
+

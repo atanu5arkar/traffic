@@ -1,40 +1,52 @@
 import math
 import time
 
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from src.constants import DEFAULT_BUCKET
+from src.models.client_config import ClientConfig
 from src.repositories.config_repository import config_repo
 from src.schemas.internal.token_bucket import ClientState, TokenBucket
+from src.schemas.requests.set_limit import SetLimit
 
 
 class RateLimiterService:
     def __init__(self) -> None:
         self._store = {}
 
-    def limiter(self, key: str):
-        msg, state = self._check_bucket(key)
-        return JSONResponse(
-            content={"msg": msg},
-            status_code=200 if msg == "ALLOW" else 429,
-            headers={
-                "x-ratelimit-limit": state.limit,
-                "x-ratelimit-remaining": state.remaining,
-                "x-ratelimit-reset": state.reset,
-            },
-        )
+    async def limiter(self, key: str):
+        try:
+            msg, state = await self._check_bucket(key)
+            return JSONResponse(
+                content={"msg": msg},
+                status_code=200 if msg == "ALLOW" else 429,
+                headers={
+                    "x-ratelimit-limit": state.limit,
+                    "x-ratelimit-remaining": state.remaining,
+                    "x-ratelimit-reset": state.reset,
+                },
+            )
+        except Exception as e:
+            print(e)
+            raise HTTPException(status_code=500, detail="Server Error")
 
-    def set_limit(self, key: str):
-        config_repo.add(key)
-        return JSONResponse(content={"msg": "Created"}, status_code=201)
+    async def set_limit(self, key: str, limit: SetLimit):
+        try:
+            config = ClientConfig(key=key, burst_size=limit.burst_size, rps=limit.rps)
+            await config_repo.add(config)
+            return JSONResponse(content={"msg": "Created"}, status_code=201)
+        except Exception as e:
+            print(e)
+            raise HTTPException(status_code=500, detail="Server Error")
 
-    def _check_bucket(self, key: str) -> tuple[str, ClientState]:
+    async def _check_bucket(self, key: str) -> tuple[str, ClientState]:
         msg = ""
         bucket: TokenBucket | None = self._store.get(key)
 
         # Handle the first request from the client
         if not bucket:
-            bucket = self._create_bucket(key)
+            bucket = await self._create_bucket(key)
             self._store[key] = bucket
 
         # Compensate for the elapsed time before deducting more tokens
@@ -50,12 +62,12 @@ class RateLimiterService:
         state = self._client_state(bucket)
         return msg, state
 
-    def _create_bucket(self, key: str):
+    async def _create_bucket(self, key: str):
         # Can use custom limits for the client, if available
-        conf = config_repo.get(key)
+        config = await config_repo.get(key)
         attributes = (
-            {"size": conf.burst_size, "rps": conf.rps, "tokens": conf.burst_size}
-            if conf
+            {"size": config.burst_size, "rps": config.rps, "tokens": config.burst_size}
+            if config
             else DEFAULT_BUCKET
         )
         return TokenBucket(**attributes)
